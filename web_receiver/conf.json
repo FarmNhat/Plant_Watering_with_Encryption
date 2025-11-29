@@ -1,0 +1,11 @@
+{
+  "device_id": "esp32_001",
+  "data": {
+    "temp": NaN,
+    "hum": NaN,
+    "soil": 86.0,
+    "rain": 0.0,
+    "total_ml": 33.0
+  },
+  "hash": "14dcef8e6ef6ff7786835d66f24c42851bc3b110fcf5febe1940a0c8ed39702f"
+}

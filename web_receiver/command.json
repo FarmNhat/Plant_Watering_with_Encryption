@@ -1,0 +1,6 @@
+{
+    "command": "pump_start",
+    "timestamp": 1234567890,
+    "duration": 11,
+    "mode": "ma"
+  }
