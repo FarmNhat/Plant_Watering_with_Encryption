@@ -7,7 +7,7 @@
 #include "mbedtls/sha256.h"
 
 //#define ENCRYPTION
-#define ENCRYPTION
+#define NON_ENCRYPTION
 
 static const char *MQTT_SERVER = "broker.hivemq.com";
 static const uint16_t MQTT_PORT = 1883;
@@ -91,7 +91,6 @@ void sha2(float temp, float hum, float soid, float total_ml, float rain){
   memcpy(output52 + 20, out32, 32);
 }
 
-
 #ifdef ENCRYPTION
 
 static void mqttCallback(char *topic, uint8_t *payload, unsigned int length)
@@ -172,11 +171,11 @@ static void mqttCallback(char *topic, uint8_t *payload, unsigned int length)
             Serial.print("  durationMs = ");
             Serial.println(durationMs);
             Serial.print("  mode = ");
-            Serial.println(modeJson);
+            Serial.println(modeStr);
             xSemaphoreGive(xSerialMutex);
         }
 
-        pump_start(durationMs, modeJson);
+        pump_start(durationMs, mode);
     }
     // ---- pump_stop ----
     else if (strcmp(cmd, "pump_stop") == 0)
