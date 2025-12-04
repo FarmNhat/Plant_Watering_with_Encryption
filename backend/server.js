@@ -6,6 +6,7 @@ import cors from 'cors';
 import mqtt from 'mqtt';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import crypto from 'crypto';
 import { mqttConfig } from './config.js';
 
 const app = express();
@@ -214,27 +215,59 @@ function emitSystemState() {
   io.emit('status_update', status);
 }
 
-// Publish command to device via MQTT
+// Publish command to device via MQTT with binary format and SHA256 hash
 function publishCommand(command, data = {}) {
   if (!mqttClient || !mqttClient.connected) {
     console.error('MQTT client not connected. Cannot send command:', command);
     return false;
   }
 
-  const commandMessage = {
-    command: command,
-    timestamp: Date.now(),
-    ...data
-  };
+  // Parse command and create binary packet
+  let pump_control = 0;
+  let duration = 0;
+  let mode = 0;
+
+  if (command === 'pump_start') {
+    pump_control = 1;
+    duration = data.duration || 10; // duration in seconds
+    mode = systemState.mode === 'automatic' ? 1 : 0;
+  } else if (command === 'pump_stop') {
+    pump_control = 0;
+    duration = data.duration || 0;
+    mode = systemState.mode === 'automatic' ? 1 : 0;
+  } else if (command === 'set_mode') {
+    pump_control = 2; // mode command
+    duration = 0;
+    mode = data.mode === 'automatic' ? 1 : 0;
+  }
+
+  // Create 6-byte binary packet: pump_control(1) + duration(4) + mode(1)
+  const packet = Buffer.alloc(6);
+  packet[0] = pump_control;
+  packet.writeUInt32BE(duration, 1);
+  packet[5] = mode;
+
+  // Calculate SHA256 hash of the 6-byte packet
+  const hash = crypto.createHash('sha256').update(packet).digest();
+
+  // Combine packet + hash (6 + 32 = 38 bytes)
+  const message = Buffer.concat([packet, hash]);
 
   const topic = mqttConfig.topics.command;
-  const message = JSON.stringify(commandMessage);
 
   mqttClient.publish(topic, message, { qos: 1 }, (err) => {
     if (err) {
       console.error(`Failed to publish command "${command}":`, err.message);
     } else {
-      console.log(`Command published to ${topic}:`, commandMessage);
+      console.log(`Command published to ${topic}:`, {
+        command,
+        pump_control,
+        duration,
+        mode,
+        packetHex: packet.toString('hex'),
+        hashHex: hash.toString('hex'),
+        messageSize: message.length
+      });
     }
   });
 
