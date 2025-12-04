@@ -316,34 +316,35 @@ void task_MQTT(void *pvParameter)
             xSemaphoreGive(xSensorMutex);
         }
 
+        // 5. Sanitize NaN values
+        if (isnan(temp)) temp = 0.0;
+        if (isnan(hum)) hum = 0.0;
+        if (isnan(soil)) soil = 0.0;
+        if (isnan(rain)) rain = 0.0;
+        if (isnan(total_ml)) total_ml = 0.0;
+
         sha2(temp, hum, soil, total_ml, rain);
 
-        // // 5. Format payload
-        // // char payload[128];
-        // // snprintf(payload, sizeof(payload),
-        // //          "{\"temp\":%.2f,\"hum\":%.2f,"
-        // //          "\"soil\":%.2f,\"rain\":%.2f,\"water_ml\":%.2f}",
-        // //          temp, hum, soil, rain, total_ml);
+        // 6. Format payload - use ArduinoJson for safer serialization
+        StaticJsonDocument<256> sensorDoc;
+        sensorDoc["temp"] = serialized(String(temp, 2));
+        sensorDoc["hum"] = serialized(String(hum, 2));
+        sensorDoc["soil"] = serialized(String(soil, 2));
+        sensorDoc["rain"] = serialized(String(rain, 2));
+        sensorDoc["water_ml"] = serialized(String(total_ml, 2));
 
-        // if (s_mqttClient.connected()){
-        //     s_mqttClient.publish(TOPIC_SENSOR, output52, 52);
-        // }
-        //     Serial.print("SHA256 ");
-        //     for (int i = 0; i < 52; i++) {
-        //         Serial.print(output52[i], HEX);
-        //     }
-        //     Serial.println();
-
-        char payload[128];
-        snprintf(payload, sizeof(payload),
-                 "{\"temp\":%.2f,\"hum\":%.2f,"
-                 "\"soil\":%.2f,\"rain\":%.2f,\"water_ml\":%.2f}",
-                 temp, hum, soil, rain, total_ml);
+        char payload[256];
+        serializeJson(sensorDoc, payload, sizeof(payload));
 
         if (s_mqttClient.connected()){
             s_mqttClient.publish(TOPIC_SENSOR, payload);
-            Serial.print("Published: ");
-            Serial.println(payload);
+            if (xSerialMutex != NULL &&
+                xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdPASS)
+            {
+                Serial.print("Published: ");
+                Serial.println(payload);
+                xSemaphoreGive(xSerialMutex);
+            }
         }
         
         vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(5000));
