@@ -425,7 +425,8 @@ function connectMQTT() {
             hum: data.hum || data.humidity || sensorData.hum,
             soil: data.soil || data.soilMoisture || sensorData.soil,
             level: data.level || data.waterLevel || data.water_ml || sensorData.level,
-            flow: data.flow || data.flowRate || data.rain || sensorData.flow,
+            rain: data.rain || sensorData.rain || 0,
+            flow: data.flow || data.flowRate || sensorData.flow,
             timestamp: Date.now()
           };
           
