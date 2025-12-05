@@ -7,7 +7,16 @@ import mqtt from 'mqtt';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import crypto from 'crypto';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { mqttConfig } from './config.js';
+
+// Get current directory for relative paths
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const execFileAsync = promisify(execFile);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -45,8 +54,45 @@ let systemState = {
   pumpStartTime: null,
   pumpDuration: 0, // in milliseconds
   lastCommand: null,
-  lastCommandTime: null
+  lastCommandTime: null,
+  aiEnabled: process.env.AI_ENABLED !== 'false', // Enable AI by default
+  lastAIDecision: null,
+  lastAIReason: null
 };
+
+// Get AI decision based on sensor data
+async function getAIDecision(temp, humid, soil) {
+  try {
+    if (!systemState.aiEnabled) {
+      return null;
+    }
+
+    const aiServicePath = path.join(__dirname, 'AI_service.py');
+    
+    // Call Python AI service with sensor data
+    const { stdout, stderr } = await execFileAsync('python', [
+      aiServicePath,
+      temp.toString(),
+      humid.toString(),
+      soil.toString()
+    ], { 
+      timeout: 5000,
+      env: process.env 
+    });
+
+    const result = JSON.parse(stdout);
+    
+    // Store last AI decision
+    systemState.lastAIDecision = result.action;
+    systemState.lastAIReason = result.reason || 'AI Model Decision';
+    
+    console.log('AI Decision:', result);
+    return result;
+  } catch (error) {
+    console.error('AI Service Error:', error.message);
+    return null;
+  }
+}
 
 // Basic health check endpoint
 app.get('/api/health', (req, res) => {
@@ -69,13 +115,69 @@ app.get('/api/status', (req, res) => {
       ? Math.max(0, systemState.pumpDuration - (Date.now() - systemState.pumpStartTime))
       : 0,
     lastCommand: systemState.lastCommand,
-    lastCommandTime: systemState.lastCommandTime
+    lastCommandTime: systemState.lastCommandTime,
+    aiEnabled: systemState.aiEnabled,
+    lastAIDecision: systemState.lastAIDecision,
+    lastAIReason: systemState.lastAIReason
   });
 });
 
 // Get current mode
 app.get('/api/mode', (req, res) => {
   res.json({ mode: systemState.mode });
+});
+
+// Get AI status
+app.get('/api/ai/status', (req, res) => {
+  res.json({
+    aiEnabled: systemState.aiEnabled,
+    lastDecision: systemState.lastAIDecision,
+    lastReason: systemState.lastAIReason
+  });
+});
+
+// Enable/Disable AI
+app.post('/api/ai/toggle', (req, res) => {
+  const { enabled } = req.body;
+  
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ 
+      error: 'Invalid parameter. "enabled" must be a boolean' 
+    });
+  }
+  
+  systemState.aiEnabled = enabled;
+  console.log(`AI ${enabled ? 'enabled' : 'disabled'}`);
+  
+  io.emit('ai_status_update', {
+    aiEnabled: systemState.aiEnabled
+  });
+  
+  res.json({
+    success: true,
+    aiEnabled: systemState.aiEnabled,
+    message: `AI ${enabled ? 'enabled' : 'disabled'}`
+  });
+});
+
+// Get AI decision for current sensor data
+app.get('/api/ai/decide', async (req, res) => {
+  try {
+    const decision = await getAIDecision(sensorData.temp, sensorData.hum, sensorData.soil);
+    
+    if (!decision) {
+      return res.status(500).json({
+        error: 'Failed to get AI decision',
+        aiEnabled: systemState.aiEnabled
+      });
+    }
+    
+    res.json(decision);
+  } catch (error) {
+    res.status(500).json({
+      error: 'Error getting AI decision: ' + error.message
+    });
+  }
 });
 
 // Set mode (automatic or manual)
@@ -209,7 +311,10 @@ function emitSystemState() {
       ? Math.max(0, systemState.pumpDuration - (Date.now() - systemState.pumpStartTime))
       : 0,
     lastCommand: systemState.lastCommand,
-    lastCommandTime: systemState.lastCommandTime
+    lastCommandTime: systemState.lastCommandTime,
+    aiEnabled: systemState.aiEnabled,
+    lastAIDecision: systemState.lastAIDecision,
+    lastAIReason: systemState.lastAIReason
   };
   
   io.emit('status_update', status);
@@ -328,6 +433,47 @@ function connectMQTT() {
           
           // Emit sensor data update to all connected clients
           io.emit('sensor_update', sensorData);
+          
+          // If in automatic mode and AI is enabled, get AI decision
+          if (systemState.mode === 'automatic' && systemState.aiEnabled && !systemState.pumpOn) {
+            getAIDecision(sensorData.temp, sensorData.hum, sensorData.soil)
+              .then(decision => {
+                if (decision && decision.action === 1) {
+                  console.log('AI Decision: Start pump');
+                  // Start pump automatically based on AI decision
+                  const durationMs = 10 * 1000; // 10 seconds default
+                  systemState.pumpOn = true;
+                  systemState.pumpStartTime = Date.now();
+                  systemState.pumpDuration = durationMs;
+                  systemState.lastCommand = 'ai_start';
+                  systemState.lastCommandTime = Date.now();
+                  
+                  publishCommand('pump_start', { 
+                    duration: 10,
+                    durationMs: durationMs,
+                    mode: systemState.mode 
+                  });
+                  
+                  emitSystemState();
+                  
+                  // Auto-stop after duration
+                  setTimeout(() => {
+                    if (systemState.pumpOn) {
+                      systemState.pumpOn = false;
+                      systemState.pumpStartTime = null;
+                      systemState.pumpDuration = 0;
+                      systemState.lastCommand = 'auto_stop';
+                      systemState.lastCommandTime = Date.now();
+                      console.log('Pump auto-stopped after duration');
+                      
+                      publishCommand('pump_stop', { reason: 'auto_stop' });
+                      emitSystemState();
+                    }
+                  }, durationMs);
+                }
+              })
+              .catch(err => console.error('Error in AI decision:', err));
+          }
         } catch (error) {
           console.error('Failed to parse MQTT message:', error.message);
           console.error('Raw message:', message.toString());
