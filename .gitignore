@@ -4,5 +4,5 @@
 .vscode/launch.json
 .vscode/ipch
 .vscode/
-.node_modules/
+node_modules/
 
